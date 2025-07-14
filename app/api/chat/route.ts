@@ -41,10 +41,10 @@ export async function POST(request: NextRequest) {
     const embeddingData = await embeddingResponse.json()
     const queryEmbedding = embeddingData.data[0].embedding
 
-    // Search similar documents
+    // Search similar documents with relaxed threshold for testing
     const { data: documents, error: searchError } = await supabase.rpc('search_documents', {
       query_embedding: `[${queryEmbedding.join(',')}]`,
-      match_threshold: 0.7,
+      match_threshold: 0.1,  // Very low threshold to test if any matches are found
       match_count: 5,
     })
 
