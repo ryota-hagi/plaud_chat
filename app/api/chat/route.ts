@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
 
     // Search similar documents
     const { data: documents, error: searchError } = await supabase.rpc('search_documents', {
-      query_embedding: queryEmbedding,
+      query_embedding: `[${queryEmbedding.join(',')}]`,
       match_threshold: 0.7,
       match_count: 5,
     })
@@ -53,7 +53,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Prepare context
+    console.log('Search results:', documents)
     const context = documents?.map((doc: any) => doc.content).join('\n\n') || ''
+    console.log('Context length:', context.length)
+    console.log('Context preview:', context.substring(0, 200))
 
     // Generate response with ChatGPT
     const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
