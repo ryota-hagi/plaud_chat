@@ -35,7 +35,23 @@ export default function Home() {
       })
 
       if (!response.ok) {
-        throw new Error('Failed to get response')
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+        
+        let errorMessage = 'エラーが発生しました。'
+        
+        if (response.status === 404) {
+          errorMessage = '申し訳ございません。お探しの情報に関連するデータが見つかりませんでした。別の質問をお試しください。'
+        } else if (response.status === 503) {
+          errorMessage = 'AI サービスに接続できませんでした。しばらく待ってから再度お試しください。'
+        } else if (response.status === 500) {
+          errorMessage = 'データベースの処理でエラーが発生しました。管理者にお問い合わせください。'
+        }
+        
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: `${errorMessage}\n\n詳細: ${errorData.details || 'なし'}` 
+        }])
+        return
       }
 
       const data = await response.json()
@@ -44,7 +60,7 @@ export default function Home() {
       console.error('Error:', error)
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: 'すみません、エラーが発生しました。しばらく待ってから再度お試しください。' 
+        content: 'ネットワークエラーが発生しました。インターネット接続を確認してから再度お試しください。' 
       }])
     } finally {
       setIsLoading(false)

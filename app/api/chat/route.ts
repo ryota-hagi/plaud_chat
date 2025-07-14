@@ -31,7 +31,11 @@ export async function POST(request: NextRequest) {
     })
 
     if (!embeddingResponse.ok) {
-      throw new Error('Failed to generate embedding')
+      console.error('OpenAI Embedding API failed:', embeddingResponse.status, embeddingResponse.statusText)
+      return NextResponse.json(
+        { error: 'Failed to generate text embedding', details: 'OpenAI API error' },
+        { status: 503 }
+      )
     }
 
     const embeddingData = await embeddingResponse.json()
@@ -45,10 +49,19 @@ export async function POST(request: NextRequest) {
     })
 
     if (searchError) {
-      console.error('Search error:', searchError)
+      console.error('Supabase search error:', searchError)
       return NextResponse.json(
-        { error: 'Failed to search documents' },
+        { error: 'Database search failed', details: searchError.message },
         { status: 500 }
+      )
+    }
+
+    // Check if search returned results
+    if (!documents || documents.length === 0) {
+      console.log('No documents found for query:', message)
+      return NextResponse.json(
+        { error: 'No relevant documents found', details: 'The query did not match any stored documents' },
+        { status: 404 }
       )
     }
 
@@ -57,6 +70,15 @@ export async function POST(request: NextRequest) {
     const context = documents?.map((doc: any) => doc.content).join('\n\n') || ''
     console.log('Context length:', context.length)
     console.log('Context preview:', context.substring(0, 200))
+
+    // Verify context is not empty
+    if (!context || context.trim().length === 0) {
+      console.error('Empty context despite having documents')
+      return NextResponse.json(
+        { error: 'No content available', details: 'Documents found but content is empty' },
+        { status: 500 }
+      )
+    }
 
     // Generate response with ChatGPT
     const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -70,12 +92,10 @@ export async function POST(request: NextRequest) {
         messages: [
           {
             role: 'system',
-            content: `あなたはPlaud.aiのデータに基づいて質問に答えるAIアシスタントです。以下のコンテキストを参考にして、正確で分かりやすい回答を日本語で提供してください。
+            content: `あなたはPlaud.aiのデータに基づいて質問に答えるAIアシスタントです。以下のコンテキストを参考にして、正確で分かりやすい回答を日本語で提供してください。必ずコンテキストの内容に基づいて回答してください。
 
 コンテキスト:
-${context}
-
-もしコンテキストに関連する情報がない場合は、「申し訳ございませんが、その情報は現在利用可能なデータに含まれていません」と回答してください。`
+${context}`
           },
           {
             role: 'user',
@@ -88,7 +108,11 @@ ${context}
     })
 
     if (!chatResponse.ok) {
-      throw new Error('Failed to generate chat response')
+      console.error('OpenAI Chat API failed:', chatResponse.status, chatResponse.statusText)
+      return NextResponse.json(
+        { error: 'Failed to generate AI response', details: 'OpenAI Chat API error' },
+        { status: 503 }
+      )
     }
 
     const chatData = await chatResponse.json()
