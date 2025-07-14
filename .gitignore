@@ -38,3 +38,7 @@ next-env.d.ts
 # docker
 /docker-data
 /postgres-data
+
+# supabase
+/supabase/functions
+.temp
