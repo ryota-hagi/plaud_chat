@@ -1,0 +1,58 @@
+{
+  "upsert_document_node_fix": {
+    "parameters": {
+      "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/rpc/upsert_document",
+      "authentication": "headerAuth",
+      "httpMethod": "POST",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {
+            "name": "Authorization",
+            "value": "Bearer YOUR_SERVICE_ROLE_KEY"
+          },
+          {
+            "name": "apikey",
+            "value": "YOUR_SERVICE_ROLE_KEY"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      },
+      "sendBody": true,
+      "bodyParameters": {
+        "parameters": [
+          {
+            "name": "p_file_path",
+            "value": "={{ $json.document.file_path }}"
+          },
+          {
+            "name": "p_content", 
+            "value": "={{ $json.document.content }}"
+          },
+          {
+            "name": "p_metadata",
+            "value": "={{ JSON.stringify($json.document.metadata) }}"
+          }
+        ]
+      }
+    },
+    "note": "従来の /rest/v1/documents ではなく /rest/v1/rpc/upsert_document を使用"
+  },
+  
+  "correct_workflow_steps": [
+    "1. Supabase SQL Editorでupsert-functions.sqlを実行",
+    "2. n8nワークフローでUPSERT関数を呼び出すようにエンドポイントを変更",
+    "3. APIキーとプロジェクトIDを正しく設定",
+    "4. テストファイルで動作確認"
+  ],
+
+  "api_endpoints_to_use": {
+    "check_file_exists": "/rest/v1/rpc/check_document_exists",
+    "upsert_document": "/rest/v1/rpc/upsert_document", 
+    "clear_chunks": "/rest/v1/rpc/clear_document_chunks",
+    "upsert_chunk": "/rest/v1/rpc/upsert_document_chunk"
+  }
+}

@@ -1,0 +1,640 @@
+{
+  "name": "Improved Dropbox to Supabase RAG Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [20, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.dropboxapi.com/2/files/list_folder",
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_DROPBOX_ACCESS_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "path",
+              "value": ""
+            },
+            {
+              "name": "recursive",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "list-dropbox-files",
+      "name": "List Dropbox Files",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Dropboxのレスポンスからmdファイルのみをフィルタリング\nconst entries = items[0].json.entries || [];\nconst mdFiles = entries.filter(entry => \n  entry['.tag'] === 'file' && \n  entry.name.endsWith('.md')\n);\n\nconsole.log(`Found ${mdFiles.length} .md files`);\n\nreturn mdFiles.map(file => ({ json: file }));"
+      },
+      "id": "filter-md-files",
+      "name": "Filter MD Files",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/rpc/check_document_exists",
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "apikey",
+              "value": "YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_file_path",
+              "value": "={{ $json.path_lower }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "check-file-exists",
+      "name": "Check File Exists",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [620, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "needs-processing",
+              "leftValue": "={{ $json[0].needs_update }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "needs-processing",
+      "name": "Needs Processing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [820, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://content.dropboxapi.com/2/files/download",
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_DROPBOX_ACCESS_TOKEN"
+            },
+            {
+              "name": "Dropbox-API-Arg",
+              "value": "={{ JSON.stringify({ \"path\": $node[\"Filter MD Files\"].json.path_lower }) }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "download-file",
+      "name": "Download File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1020, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// ダウンロードしたファイルの内容を処理\nconst fileData = items[0].json;\nlet content = '';\n\n// contentの取得\nif (typeof fileData === 'string') {\n  content = fileData;\n} else if (fileData.content) {\n  content = fileData.content;\n} else if (items[0].binary?.data) {\n  content = Buffer.from(items[0].binary.data, 'base64').toString('utf-8');\n} else {\n  content = JSON.stringify(fileData);\n}\n\n// チャンクサイズの設定\nconst CHUNK_SIZE = 1000;\nconst OVERLAP_SIZE = 200;\n\n// テキストをチャンクに分割する関数\nfunction createChunks(text, chunkSize, overlapSize) {\n  const chunks = [];\n  let start = 0;\n  \n  while (start < text.length) {\n    let end = start + chunkSize;\n    \n    if (end < text.length) {\n      const lastNewline = text.lastIndexOf('\\n', end);\n      const lastPeriod = text.lastIndexOf('。', end);\n      const lastQuestion = text.lastIndexOf('？', end);\n      const lastExclamation = text.lastIndexOf('！', end);\n      \n      const breakPoints = [lastNewline, lastPeriod, lastQuestion, lastExclamation].filter(pos => pos > start);\n      \n      if (breakPoints.length > 0) {\n        end = Math.max(...breakPoints) + 1;\n      }\n    }\n    \n    const chunk = text.slice(start, end).trim();\n    if (chunk.length > 0) {\n      chunks.push(chunk);\n    }\n    \n    start = end - overlapSize;\n  }\n  \n  return chunks;\n}\n\n// メタデータの抽出\nconst filePath = $node[\"Filter MD Files\"].json.path_lower || 'unknown';\nconst fileName = filePath.split('/').pop() || 'unknown';\nconst fileSize = content.length;\nconst wordCount = content.split(/\\s+/).length;\n\n// 日付の抽出（ファイル名から推測）\nconst dateMatch = fileName.match(/(\\d{4}[-_]\\d{2}[-_]\\d{2})/);\nconst extractedDate = dateMatch ? dateMatch[1] : null;\n\n// チャンクの作成\nconst chunks = createChunks(content, CHUNK_SIZE, OVERLAP_SIZE);\n\nconst result = {\n  document: {\n    file_path: filePath,\n    content: content,\n    metadata: {\n      fileName: fileName,\n      fileSize: fileSize,\n      wordCount: wordCount,\n      chunkCount: chunks.length,\n      extractedDate: extractedDate,\n      processedAt: new Date().toISOString(),\n      dropboxInfo: $node[\"Filter MD Files\"].json\n    }\n  },\n  chunks: chunks.map((chunk, index) => ({\n    chunk_index: index,\n    content: chunk\n  }))\n};\n\nconsole.log(`Processed file: ${fileName}, chunks: ${chunks.length}`);\n\nreturn [result];"
+      },
+      "id": "process-text-content",
+      "name": "Process Text Content",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1220, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/rpc/upsert_document",
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "apikey",
+              "value": "YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_file_path",
+              "value": "={{ $json.document.file_path }}"
+            },
+            {
+              "name": "p_content",
+              "value": "={{ $json.document.content }}"
+            },
+            {
+              "name": "p_metadata",
+              "value": "={{ JSON.stringify($json.document.metadata) }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "upsert-document",
+      "name": "Upsert Document",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1420, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/rpc/clear_document_chunks",
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "apikey",
+              "value": "YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_document_id",
+              "value": "={{ $json[0].id }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "clear-old-chunks",
+      "name": "Clear Old Chunks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1620, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 3,
+        "options": {}
+      },
+      "id": "split-chunks",
+      "name": "Split Chunks",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1820, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// チャンクの埋め込み生成準備\nconst chunks = $node[\"Process Text Content\"].json.chunks;\nconst documentId = $node[\"Upsert Document\"].json[0].id;\n\nconst processedChunks = [];\n\nfor (const chunk of chunks) {\n  processedChunks.push({\n    document_id: documentId,\n    chunk_index: chunk.chunk_index,\n    content: chunk.content,\n    needsEmbedding: true\n  });\n}\n\nconsole.log(`Preparing ${processedChunks.length} chunks for embedding`);\n\nreturn processedChunks.map(chunk => ({ json: chunk }));"
+      },
+      "id": "prepare-chunks",
+      "name": "Prepare Chunks for Embedding",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2020, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_OPENAI_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "text-embedding-ada-002"
+            },
+            {
+              "name": "input",
+              "value": "={{ $json.content }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "generate-embeddings",
+      "name": "Generate Embeddings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/rpc/upsert_document_chunk",
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "apikey",
+              "value": "YOUR_SERVICE_ROLE_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_document_id",
+              "value": "={{ $node[\"Prepare Chunks for Embedding\"].json.document_id }}"
+            },
+            {
+              "name": "p_chunk_index",
+              "value": "={{ $node[\"Prepare Chunks for Embedding\"].json.chunk_index }}"
+            },
+            {
+              "name": "p_content",
+              "value": "={{ $node[\"Prepare Chunks for Embedding\"].json.content }}"
+            },
+            {
+              "name": "p_embedding",
+              "value": "={{ JSON.stringify($json.data[0].embedding) }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "save-chunk",
+      "name": "Save Chunk with Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2420, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "batch-complete",
+              "leftValue": "={{ $node[\"Split Chunks\"].json.done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-batch-complete",
+      "name": "Check Batch Complete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2620, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// 処理完了ログ\nconst fileName = $node[\"Process Text Content\"].json.document.metadata.fileName;\nconst chunkCount = $node[\"Process Text Content\"].json.document.metadata.chunkCount;\nconst documentId = $node[\"Upsert Document\"].json[0].id;\nconst isNew = $node[\"Upsert Document\"].json[0].is_new;\n\nconst logMessage = {\n  status: 'completed',\n  fileName: fileName,\n  documentId: documentId,\n  chunkCount: chunkCount,\n  isNew: isNew,\n  processedAt: new Date().toISOString()\n};\n\nconsole.log('Processing completed:', JSON.stringify(logMessage, null, 2));\n\nreturn [{ json: logMessage }];"
+      },
+      "id": "log-completion",
+      "name": "Log Completion",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2820, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "List Dropbox Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Dropbox Files": {
+      "main": [
+        [
+          {
+            "node": "Filter MD Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter MD Files": {
+      "main": [
+        [
+          {
+            "node": "Check File Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check File Exists": {
+      "main": [
+        [
+          {
+            "node": "Needs Processing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Processing?": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Process Text Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Text Content": {
+      "main": [
+        [
+          {
+            "node": "Upsert Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Document": {
+      "main": [
+        [
+          {
+            "node": "Clear Old Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Old Chunks": {
+      "main": [
+        [
+          {
+            "node": "Split Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Chunks": {
+      "main": [
+        [
+          {
+            "node": "Prepare Chunks for Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Chunks for Embedding": {
+      "main": [
+        [
+          {
+            "node": "Generate Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Save Chunk with Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Chunk with Embedding": {
+      "main": [
+        [
+          {
+            "node": "Check Batch Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Batch Complete": {
+      "main": [
+        [
+          {
+            "node": "Log Completion",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "versionId": "2"
+}

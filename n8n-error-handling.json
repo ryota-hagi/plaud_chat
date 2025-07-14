@@ -1,0 +1,91 @@
+{
+  "name": "Error Handling Workflow Addition",
+  "description": "既存ワークフローに追加するエラーハンドリングノード群",
+  "errorHandlingNodes": [
+    {
+      "parameters": {
+        "functionCode": "// エラーハンドリング用関数\nfunction logError(error, context) {\n  const errorLog = {\n    timestamp: new Date().toISOString(),\n    error: error.message || error,\n    context: context,\n    nodeInfo: {\n      workflow: $workflow.name,\n      execution: $execution.id\n    }\n  };\n  \n  console.error('Workflow Error:', JSON.stringify(errorLog, null, 2));\n  return errorLog;\n}\n\n// リトライ用関数\nfunction shouldRetry(error, attemptCount, maxRetries = 3) {\n  if (attemptCount >= maxRetries) return false;\n  \n  // リトライ可能なエラーの判定\n  const retryableErrors = [\n    'timeout',\n    'network',\n    'rate_limit',\n    'server_error',\n    '500',\n    '502',\n    '503',\n    '504'\n  ];\n  \n  const errorStr = (error.message || error).toLowerCase();\n  return retryableErrors.some(retryableError => \n    errorStr.includes(retryableError)\n  );\n}\n\n// バックオフ時間計算\nfunction calculateBackoff(attemptCount, baseDelay = 1000) {\n  return Math.min(baseDelay * Math.pow(2, attemptCount), 30000);\n}\n\nreturn [{\n  json: {\n    errorHandling: {\n      logError,\n      shouldRetry,\n      calculateBackoff\n    }\n  }\n}];"
+      },
+      "id": "error-handling-utils",
+      "name": "Error Handling Utils",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [100, 600]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Dropbox API エラーハンドリング\ntry {\n  const response = items[0];\n  \n  if (response.json && response.json.error) {\n    throw new Error(`Dropbox API Error: ${response.json.error.message}`);\n  }\n  \n  return items;\n} catch (error) {\n  const errorLog = {\n    timestamp: new Date().toISOString(),\n    service: 'Dropbox',\n    error: error.message,\n    operation: 'list_files',\n    retryable: true\n  };\n  \n  console.error('Dropbox Error:', JSON.stringify(errorLog, null, 2));\n  \n  // エラーを再投げして上位でハンドリング\n  throw error;\n}"
+      },
+      "id": "dropbox-error-handler",
+      "name": "Dropbox Error Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [300, 600]
+    },
+    {
+      "parameters": {
+        "functionCode": "// OpenAI API エラーハンドリング\ntry {\n  const response = items[0];\n  \n  if (response.json && response.json.error) {\n    const error = response.json.error;\n    \n    // レート制限エラーの場合\n    if (error.type === 'rate_limit_exceeded') {\n      throw new Error(`OpenAI Rate Limit: ${error.message}`);\n    }\n    \n    // その他のエラー\n    throw new Error(`OpenAI API Error: ${error.message}`);\n  }\n  \n  return items;\n} catch (error) {\n  const errorLog = {\n    timestamp: new Date().toISOString(),\n    service: 'OpenAI',\n    error: error.message,\n    operation: 'generate_embeddings',\n    retryable: error.message.includes('rate_limit') || error.message.includes('timeout')\n  };\n  \n  console.error('OpenAI Error:', JSON.stringify(errorLog, null, 2));\n  \n  // レート制限の場合は待機時間を設定\n  if (error.message.includes('rate_limit')) {\n    errorLog.suggestedDelay = 60000; // 60秒待機\n  }\n  \n  throw error;\n}"
+      },
+      "id": "openai-error-handler",
+      "name": "OpenAI Error Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [500, 600]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Supabase API エラーハンドリング\ntry {\n  const response = items[0];\n  \n  // HTTP エラーステータスチェック\n  if (response.statusCode && response.statusCode >= 400) {\n    const errorMessage = response.json?.message || response.json?.error || 'Unknown Supabase error';\n    throw new Error(`Supabase Error (${response.statusCode}): ${errorMessage}`);\n  }\n  \n  return items;\n} catch (error) {\n  const errorLog = {\n    timestamp: new Date().toISOString(),\n    service: 'Supabase',\n    error: error.message,\n    operation: 'database_operation',\n    retryable: false // データベースエラーは通常リトライしない\n  };\n  \n  // 一時的なエラーの場合はリトライ可能とする\n  if (error.message.includes('timeout') || \n      error.message.includes('connection') ||\n      error.message.includes('503') ||\n      error.message.includes('502')) {\n    errorLog.retryable = true;\n  }\n  \n  console.error('Supabase Error:', JSON.stringify(errorLog, null, 2));\n  throw error;\n}"
+      },
+      "id": "supabase-error-handler",
+      "name": "Supabase Error Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [700, 600]
+    },
+    {
+      "parameters": {
+        "functionCode": "// 統合エラーレポート生成\nconst errors = items.filter(item => item.json.error);\n\nif (errors.length === 0) {\n  return [{ json: { status: 'success', message: 'No errors detected' } }];\n}\n\nconst errorReport = {\n  timestamp: new Date().toISOString(),\n  totalErrors: errors.length,\n  errors: errors.map(error => ({\n    service: error.json.service,\n    operation: error.json.operation,\n    error: error.json.error,\n    retryable: error.json.retryable,\n    timestamp: error.json.timestamp\n  })),\n  summary: {\n    dropboxErrors: errors.filter(e => e.json.service === 'Dropbox').length,\n    openaiErrors: errors.filter(e => e.json.service === 'OpenAI').length,\n    supabaseErrors: errors.filter(e => e.json.service === 'Supabase').length,\n    retryableErrors: errors.filter(e => e.json.retryable).length\n  },\n  recommendations: []\n};\n\n// 推奨事項の生成\nif (errorReport.summary.retryableErrors > 0) {\n  errorReport.recommendations.push('Some errors are retryable. Consider implementing automatic retry.');\n}\n\nif (errorReport.summary.openaiErrors > 0) {\n  errorReport.recommendations.push('OpenAI errors detected. Check API quota and rate limits.');\n}\n\nif (errorReport.summary.dropboxErrors > 0) {\n  errorReport.recommendations.push('Dropbox errors detected. Verify access token and permissions.');\n}\n\nconsole.log('Error Report:', JSON.stringify(errorReport, null, 2));\n\nreturn [{ json: errorReport }];"
+      },
+      "id": "error-reporter",
+      "name": "Error Reporter",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "functionCode": "// リトライロジック実装\nconst maxRetries = 3;\nconst baseDelay = 2000; // 2秒\n\n// 実行コンテキストから試行回数を取得\nlet attemptCount = $executionData?.contextData?.attemptCount || 0;\n\n// エラー情報の取得\nconst lastError = items[0]?.json?.error || 'Unknown error';\n\n// リトライ判定\nfunction shouldRetry(error, attempt) {\n  if (attempt >= maxRetries) return false;\n  \n  const retryableKeywords = [\n    'timeout', 'rate_limit', 'network', 'connection',\n    '500', '502', '503', '504', 'temporary'\n  ];\n  \n  return retryableKeywords.some(keyword => \n    error.toLowerCase().includes(keyword)\n  );\n}\n\n// バックオフ時間計算\nfunction calculateDelay(attempt) {\n  return Math.min(baseDelay * Math.pow(2, attempt), 60000); // 最大60秒\n}\n\nif (shouldRetry(lastError, attemptCount)) {\n  const delay = calculateDelay(attemptCount);\n  \n  const retryInfo = {\n    willRetry: true,\n    attemptCount: attemptCount + 1,\n    delay: delay,\n    reason: 'Error is retryable',\n    error: lastError,\n    timestamp: new Date().toISOString()\n  };\n  \n  console.log(`Retrying in ${delay}ms (attempt ${attemptCount + 1}/${maxRetries}):`, lastError);\n  \n  // 待機時間を設定（n8nのWaitノードで使用）\n  return [{ \n    json: retryInfo,\n    pairedItem: { item: 0 }\n  }];\n} else {\n  const failInfo = {\n    willRetry: false,\n    attemptCount: attemptCount,\n    reason: attemptCount >= maxRetries ? 'Max retries exceeded' : 'Error not retryable',\n    error: lastError,\n    timestamp: new Date().toISOString()\n  };\n  \n  console.error('Retry failed:', failInfo);\n  \n  return [{ \n    json: failInfo,\n    pairedItem: { item: 0 }\n  }];\n}"
+      },
+      "id": "retry-logic",
+      "name": "Retry Logic",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1100, 600]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.delay || 5000 }}",
+        "unit": "ms"
+      },
+      "id": "retry-wait",
+      "name": "Retry Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1300, 600]
+    }
+  ],
+  "errorHandlingInstructions": {
+    "setup": "各HTTPリクエストノードの後にエラーハンドリングノードを追加",
+    "configuration": [
+      "1. 各APIコールの直後にエラーハンドラーを接続",
+      "2. エラー時の分岐処理をIFノードで実装", 
+      "3. リトライ可能エラーの場合はRetry Logicに接続",
+      "4. 最終的にError Reporterで統合レポート生成"
+    ],
+    "implementation": [
+      "On Error設定で各ノードをエラーハンドラーに接続",
+      "Continue on Fail設定を有効化",
+      "エラー時の代替パスを定義"
+    ]
+  }
+}
