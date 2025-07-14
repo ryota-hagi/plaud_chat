@@ -42,11 +42,13 @@ export async function POST(request: NextRequest) {
     const queryEmbedding = embeddingData.data[0].embedding
 
     // Search similar documents with relaxed threshold for testing
-    const { data: documents, error: searchError } = await supabase.rpc('search_documents', {
+    const { data: vectorSearchResults, error: searchError } = await supabase.rpc('search_documents', {
       query_embedding: `[${queryEmbedding.join(',')}]`,
       match_threshold: 0.1,  // Very low threshold to test if any matches are found
       match_count: 5,
     })
+
+    let documents = vectorSearchResults
 
     if (searchError) {
       console.error('Supabase search error:', searchError)
