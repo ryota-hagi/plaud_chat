@@ -56,13 +56,37 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if search returned results
+    // Check if search returned results, if not try simple text search
     if (!documents || documents.length === 0) {
-      console.log('No documents found for query:', message)
-      return NextResponse.json(
-        { error: 'No relevant documents found', details: 'The query did not match any stored documents' },
-        { status: 404 }
-      )
+      console.log('No vector matches found, trying text search for:', message)
+      
+      // Fallback to simple text search
+      const { data: textSearchResults, error: textSearchError } = await supabase
+        .from('documents')
+        .select('id, file_path, content, metadata')
+        .ilike('content', `%${message}%`)
+        .limit(3)
+
+      if (textSearchError) {
+        console.error('Text search error:', textSearchError)
+      }
+
+      if (textSearchResults && textSearchResults.length > 0) {
+        console.log('Found results with text search:', textSearchResults.length)
+        // Use text search results
+        documents = textSearchResults.map(doc => ({
+          id: doc.id,
+          content: doc.content,
+          file_path: doc.file_path,
+          metadata: doc.metadata,
+          similarity: 0.5 // Dummy similarity for text search
+        }))
+      } else {
+        return NextResponse.json(
+          { error: 'No relevant documents found', details: 'Neither vector nor text search found matching documents' },
+          { status: 404 }
+        )
+      }
     }
 
     // Prepare context

@@ -6,7 +6,15 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 const supabase = createClient(supabaseUrl, supabaseKey)
 
+export async function GET() {
+  return await setupTestData()
+}
+
 export async function POST() {
+  return await setupTestData()
+}
+
+async function setupTestData() {
   try {
     console.log('Setting up test data with real embeddings...')
 
